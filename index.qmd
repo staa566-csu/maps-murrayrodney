@@ -1,0 +1,115 @@
+---
+title: "Maps"
+format: 
+  html:
+    toc: true
+editor: visual
+---
+
+```{r, warning=F, message=F}
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(ggdendro)
+library(viridis)
+library(gridExtra)
+library(tidyr)
+```
+
+## Description
+
+I downloaded corn yield data from [USDA's quick stats lite site](https://www.nass.usda.gov/Quick_Stats/Lite/index.php#91CC0BA8-1B17-3774-91BB-3549B470CD60) so that I could compare corn yields for irrigated land over time from a couple of states of interest: Montana (where I will be moving to) and Colorado (because of CSU).
+
+To replicate the data one can visit the site linked above and apply the filters described below:
+
+-   Sector = CROPS
+-   Group = FIELD CROPS
+-   Commodity = CORN
+-   View = Acreage, Yield, and Production - Irrigated / Non-Irrigated
+-   Year = 1950-2022
+-   Geographic Level = State
+
+**Note:** I exported data for all states, but had to do it in two exports. The tool provided an empty CSV when I attempted to select data for all states at once. This data is also available in this GitHub repo.
+
+## Load Data
+```{r}
+# Read data from a csv file
+# data <- read.csv('corn_production.csv')
+data1 <- read.csv('corn_production1.csv')
+data2 <- read.csv('corn_production2.csv')
+data <- bind_rows(data1, data2)
+
+# Change the names to lower case so that they're easier for me to work with
+names(data) <- tolower(names(data))
+```
+
+## Data preparation
+
+Here I will rename, select a subset of columns, and filter the data to records that have data for production as well as those where the corn was grown on irrigated land. I will also filter data at this point to Year > 1980 to help focus on the time period I'm interested in.
+
+```{r, warning=FALSE}
+# Rename, select a subset of columns, and filter
+prep_data <- data %>%
+  rename(
+    production=production.in.bu, 
+    harvested_area=area.harvested.in.acres,
+    yield=yield.in.bu...acre
+    ) %>% 
+  filter(
+    production > 0,
+    prodn.practice == 'IRRIGATED',
+    year >= 1980
+    ) %>% 
+  select(year, location, prodn.practice, harvested_area, production, yield)
+  
+# Get the average yields for stats in the 2000 to 2005 time period
+average_state_yields <- prep_data %>% filter(
+      year >= 2000,
+    year < 2005
+  ) %>% 
+  group_by(location) %>% 
+  summarize(
+    havested_area=mean(harvested_area),
+    production=mean(production),
+    yield=mean(yield)
+    ) %>% 
+  mutate(state = location)
+
+# Get the map data for the stats and merge with the yield data
+state_data <- map_data('state') %>% 
+  mutate(state=toupper(region)) %>% 
+  left_join(average_state_yields, by=c('state'))
+```
+
+
+# Plotting/Mapping
+
+Here the yields through time for the states that I was able to query records for are plotted. It's pretty clear that the yields have been increasing through time, but how do they vary spatially? To get a better idea of this I made a map colored to show the average yield (bushels per acre) for the states over the 2000-2005 time period. The 2000-2005 time period was chosen since data for most of the states provided by USDA was available for this time period (with the exception of Idaho and Delaware). From this it can be seen that over the 5 year time period Northern states such as Montana, North Dakota, and Wyoming had lower corn yields than Southern states such as Texas, New Mexico, and Kansas.
+
+```{r, fig.width=9, fig.height=15}
+time_plot <- ggplot(prep_data, aes(x=year, y=yield, group=location)) +
+  # geom_line(color='dodgerblue') +
+  geom_line(aes(color=location)) +
+  annotate(
+    'rect', 
+    xmin=2000, 
+    xmax=2005, 
+    ymin=min(prep_data$yield), 
+    ymax=max(prep_data$yield),
+    color='red',
+    fill='red',
+    alpha=0.05
+    ) +
+  annotate('text', x=2002.5, y=75, label='Average\nPeriod')+
+  labs(title='Yields Over Time', x='Year', y='Yield')
+
+plot_state_data <- drop_na(state_data, yield)
+state_chorpleth <- ggplot(plot_state_data, aes(x=long, y=lat, group=group, order=order, fill=yield)) +
+  theme_dendro() +
+  scale_fill_viridis(option='magma') +
+  geom_polygon() +
+  labs(tile='Average State Yields', color='Yield (bu/acre)')
+
+grid.arrange(time_plot, state_chorpleth, nrow=2, heights=c(3, 10))
+```
+
